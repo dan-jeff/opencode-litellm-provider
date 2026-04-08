@@ -3,6 +3,44 @@ import { getConfigs, addConfig, removeConfig, LiteLLMConfig } from './config';
 import { fetchModels, normalizeUrl, LiteLLMModel } from './client';
 import { createConnectTool } from './tools';
 
+function exposedID(m: LiteLLMModel): string {
+  if (m.mode !== "responses") return m.id;
+  if (!m.id.includes("/")) return m.id;
+  if (!["chatgpt", "openai"].includes(m.litellmProvider || "")) return m.id;
+  return m.id.split("/").slice(1).join("/");
+}
+
+function resolveModelID(m: LiteLLMModel, models: Record<string, any>): string {
+  const id = exposedID(m);
+  if (id === m.id) return id;
+  if (models[id]) return m.id;
+  return id;
+}
+
+function aliasFetch(aliases: Record<string, string>) {
+  return async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (!init?.body || init.method !== "POST" || Object.keys(aliases).length === 0) {
+      return fetch(input, init);
+    }
+
+    try {
+      const body = JSON.parse(init.body as string);
+      const alias = typeof body?.model === "string" ? aliases[body.model] : undefined;
+      if (!alias) return fetch(input, init);
+
+      return fetch(input, {
+        ...init,
+        body: JSON.stringify({
+          ...body,
+          model: alias,
+        }),
+      });
+    } catch (_) {
+      return fetch(input, init);
+    }
+  };
+}
+
 // Provider-specific reasoning effort levels
 const REASONING_VARIANTS: Record<string, Record<string, any>> = {
   openai: {
@@ -74,6 +112,7 @@ export const litellmPlugin: Plugin = async (_ctx: PluginInput) => {
       for (const sc of serverConfigs) {
         const providerID = `litellm-${sc.alias}`;
         const baseUrl = normalizeUrl(sc.url);
+        const aliases: Record<string, string> = {};
 
         // Fetch models if not cached
         let models: LiteLLMModel[] = modelCache.get(sc.alias) || [];
@@ -95,15 +134,19 @@ export const litellmPlugin: Plugin = async (_ctx: PluginInput) => {
           options: {
             baseURL: `${baseUrl}/v1`,
             apiKey: sc.key,
+            fetch: aliasFetch(aliases),
           },
           models: {},
         };
 
         if (models.length > 0) {
           for (const m of models) {
+            const id = resolveModelID(m, config.provider[providerID].models);
+            if (id !== m.id) aliases[id] = m.id;
+
             const modelConfig: any = {
-              id: m.id,
-              name: m.name || m.id,
+              id,
+              name: id === m.id ? (m.name || m.id) : m.id,
               limit: {
                 context: m.contextWindow,
                 output: m.maxOutputTokens,
@@ -126,7 +169,7 @@ export const litellmPlugin: Plugin = async (_ctx: PluginInput) => {
               modelConfig.variants = getReasoningVariants(m);
             }
 
-            config.provider[providerID].models[m.id] = modelConfig;
+            config.provider[providerID].models[id] = modelConfig;
           }
         } else {
           config.provider[providerID].models["placeholder"] = {

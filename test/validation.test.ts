@@ -13,10 +13,10 @@ mock.module("../src/config", () => {
   };
 });
 
-function mockFetch(handler: (url: string) => Response) {
-  globalThis.fetch = mock(async (input: any) => {
+function mockFetch(handler: (url: string, init?: RequestInit) => Response) {
+  globalThis.fetch = mock(async (input: any, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input.url;
-    return handler(url);
+    return handler(url, init);
   }) as any;
 }
 
@@ -149,6 +149,111 @@ describe("LiteLLM Plugin Validation", () => {
     const gpt4o = config.provider["litellm-work"].models["gpt-4o"];
     expect(gpt4o.capabilities.reasoning).toBe(false);
     expect(gpt4o.variants).toBeUndefined();
+  });
+
+  test("responses-mode models are exposed with OpenAI ids", async () => {
+    mockFetch((url) => {
+      if (url.endsWith("/v1/models"))
+        return modelsResponse([{ id: "chatgpt/gpt-5.4" }, { id: "zai/glm-5" }]);
+      if (url.endsWith("/model/info"))
+        return modelInfoResponse([
+          {
+            model_name: "chatgpt/gpt-5.4",
+            model_info: {
+              mode: "responses",
+              litellm_provider: "chatgpt",
+              supports_function_calling: true,
+              supported_openai_params: ["reasoning_effort", "tools"],
+            },
+          },
+          {
+            model_name: "zai/glm-5",
+            model_info: {
+              mode: "chat",
+              supports_function_calling: true,
+              supported_openai_params: ["tools"],
+            },
+          },
+        ]);
+      return modelsResponse([]);
+    });
+
+    const plugin = await litellmPlugin({} as any);
+    const config: any = { provider: {} };
+    await (plugin as any).config(config);
+
+    expect(config.provider["litellm-work"].models["gpt-5.4"]).toBeDefined();
+    expect(config.provider["litellm-work"].models["gpt-5.4"].name).toBe("chatgpt/gpt-5.4");
+    expect(config.provider["litellm-work"].models["zai/glm-5"]).toBeDefined();
+  });
+
+  test("responses-mode aliases are rewritten back to LiteLLM ids", async () => {
+    const calls: any[] = [];
+    mockFetch((url, init) => {
+      calls.push({ url, init });
+      if (url.endsWith("/v1/models"))
+        return modelsResponse([{ id: "chatgpt/gpt-5.4" }]);
+      if (url.endsWith("/model/info"))
+        return modelInfoResponse([
+          {
+            model_name: "chatgpt/gpt-5.4",
+            model_info: {
+              mode: "responses",
+              litellm_provider: "chatgpt",
+              supports_function_calling: true,
+              supported_openai_params: ["reasoning_effort", "tools"],
+            },
+          },
+        ]);
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    });
+
+    const plugin = await litellmPlugin({} as any);
+    const config: any = { provider: {} };
+    await (plugin as any).config(config);
+
+    await config.provider["litellm-work"].options.fetch("http://server1/v1/responses", {
+      method: "POST",
+      body: JSON.stringify({ model: "gpt-5.4", input: "hi" }),
+      headers: { "content-type": "application/json" },
+    });
+
+    const body = JSON.parse(calls.at(-1).init.body);
+    expect(body.model).toBe("chatgpt/gpt-5.4");
+  });
+
+  test("responses-mode aliases do not overwrite colliding models", async () => {
+    mockFetch((url) => {
+      if (url.endsWith("/v1/models"))
+        return modelsResponse([{ id: "chatgpt/gpt-5.4" }, { id: "openai/gpt-5.4" }]);
+      if (url.endsWith("/model/info"))
+        return modelInfoResponse([
+          {
+            model_name: "chatgpt/gpt-5.4",
+            model_info: {
+              mode: "responses",
+              litellm_provider: "chatgpt",
+              supports_function_calling: true,
+            },
+          },
+          {
+            model_name: "openai/gpt-5.4",
+            model_info: {
+              mode: "responses",
+              litellm_provider: "openai",
+              supports_function_calling: true,
+            },
+          },
+        ]);
+      return modelsResponse([]);
+    });
+
+    const plugin = await litellmPlugin({} as any);
+    const config: any = { provider: {} };
+    await (plugin as any).config(config);
+
+    expect(config.provider["litellm-work"].models["gpt-5.4"]).toBeDefined();
+    expect(config.provider["litellm-work"].models["openai/gpt-5.4"]).toBeDefined();
   });
 
   test("auth hook returns SDK-compliant success with key", async () => {

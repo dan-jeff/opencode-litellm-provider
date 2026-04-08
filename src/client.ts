@@ -1,6 +1,7 @@
 export interface LiteLLMModel {
   id: string;
   name: string;
+  mode: string | null;
   contextWindow: number;
   maxOutputTokens: number;
   supportsVision: boolean;
@@ -87,6 +88,7 @@ export async function fetchModels(url: string, key: string): Promise<LiteLLMMode
     return {
       id: model.id,
       name: model.name || model.id,
+      mode: info.mode || null,
       contextWindow: info.max_input_tokens || info.max_tokens || model.context_window || 128000,
       maxOutputTokens: info.max_output_tokens || 4096,
       supportsVision: info.supports_vision ?? false,
