@@ -129,12 +129,10 @@ export const litellmPlugin: Plugin = async (_ctx: PluginInput) => {
         config.provider[providerID] = {
           id: providerID,
           name: `LiteLLM (${sc.alias})`,
-          npm: "@ai-sdk/openai",
-          api: "openai",
+          npm: "@ai-sdk/openai-compatible",
           options: {
             baseURL: `${baseUrl}/v1`,
             apiKey: sc.key,
-            fetch: aliasFetch(aliases),
           },
           models: {},
         };
@@ -170,6 +168,10 @@ export const litellmPlugin: Plugin = async (_ctx: PluginInput) => {
             }
 
             config.provider[providerID].models[id] = modelConfig;
+          }
+
+          if (Object.keys(aliases).length > 0) {
+            config.provider[providerID].options.fetch = aliasFetch(aliases);
           }
         } else {
           config.provider[providerID].models["placeholder"] = {
